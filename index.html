@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>RTX 2060 Nebula Engine - 3D Edition</title>
+    <title>RTX 2060 Hyper-Cinematic Engine</title>
     <style>
         body { margin: 0; overflow: hidden; background: #000; font-family: 'Courier New', monospace; }
         canvas { display: block; }
@@ -10,21 +10,18 @@
         #stats {
             position: absolute; top: 10px; left: 10px; color: #0ff;
             background: rgba(0,0,0,0.7); padding: 15px; pointer-events: none;
-            border: 1px solid #0ff; font-size: 12px; line-height: 1.6;
-            box-shadow: 0 0 15px rgba(0, 255, 255, 0.3);
+            border: 1px solid #0ff; font-size: 11px; z-index: 100;
         }
-        #hud-msg { color: #fff; font-weight: bold; }
     </style>
 </head>
 <body>
     <div id="stats">
-        DEVICE: RTX 2060 OPTIMIZED<br>
+        ENGINE: HYPER-CINEMATIC (RTX 2060)<br>
         PARTICLES: 50,000<br>
         FPS: <span id="fps">0</span><br>
-        LATENCY: <span id="lat">0</span>ms<br>
-        STATUS: <span id="hud-msg">INITIALIZING AI...</span>
+        MODE: <span id="modeText">STABLE</span>
     </div>
-    <video class="input_video"></video>
+    <video class="input_video" playsinline muted></video>
     <div id="container"></div>
 
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
@@ -34,24 +31,42 @@
     <script>
         const videoElement = document.querySelector('.input_video');
         const fpsOut = document.getElementById('fps');
-        const latOut = document.getElementById('lat');
-        const hudMsg = document.getElementById('hud-msg');
+        const modeText = document.getElementById('modeText');
         
         let scene, camera, renderer, particles, targetPositions, velocities;
         const count = 50000; 
-        let lastTime = 0;
-        let handX = 0, handY = 0, handZ = 0;
+        let lastTime = 0, lastPalmX = 0, lastPalmY = 0;
+        let isExploding = false;
+
+        const colorCyan = new THREE.Color(0x00ffff);
+        const colorRed = new THREE.Color(0xff2200);
+
+        // --- 1. PROCEDURAL GLOW TEXTURE (From Code #1) ---
+        function createGlowTexture() {
+            const canvas = document.createElement('canvas');
+            canvas.width = 64; canvas.height = 64;
+            const ctx = canvas.getContext('2d');
+            const gradient = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+            gradient.addColorStop(0, 'rgba(255,255,255,1)');
+            gradient.addColorStop(0.2, 'rgba(0,255,255,0.5)');
+            gradient.addColorStop(0.5, 'rgba(0,255,255,0.1)');
+            gradient.addColorStop(1, 'rgba(0,255,255,0)');
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, 0, 64, 64);
+            return new THREE.CanvasTexture(canvas);
+        }
 
         function init() {
             scene = new THREE.Scene();
             camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
-            camera.position.z = 25;
+            camera.position.z = 22;
 
             renderer = new THREE.WebGLRenderer({ 
                 antialias: false, 
-                powerPreference: "high-performance",
-                precision: "highp" 
+                preserveDrawingBuffer: true, // FOR THE NEON TRAILS
+                powerPreference: "high-performance" 
             });
+            renderer.autoClearColor = false; // ENABLE TRAILS
             renderer.setSize(window.innerWidth, window.innerHeight);
             document.getElementById('container').appendChild(renderer.domElement);
 
@@ -60,18 +75,18 @@
             targetPositions = new Float32Array(count * 3);
             velocities = new Float32Array(count * 3);
 
-            // Initial random distribution
             for (let i = 0; i < count * 3; i++) {
-                pos[i] = (Math.random() - 0.5) * 50;
+                pos[i] = (Math.random() - 0.5) * 40;
                 targetPositions[i] = pos[i];
-                velocities[i] = 0;
             }
 
             geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
             
+            // --- CINEMATIC MATERIAL ---
             const mat = new THREE.PointsMaterial({ 
                 color: 0x00ffff, 
-                size: 0.05, 
+                size: 0.12, 
+                map: createGlowTexture(),
                 blending: THREE.AdditiveBlending, 
                 transparent: true, 
                 depthWrite: false 
@@ -84,55 +99,52 @@
             animate(0);
         }
 
+        function triggerFirework() {
+            if (isExploding) return;
+            isExploding = true;
+            modeText.innerText = "KINETIC BLAST";
+            particles.material.color.copy(colorRed);
+            
+            for (let i = 0; i < count * 3; i++) {
+                targetPositions[i] *= 6.0; // Explosion force
+            }
+
+            setTimeout(() => {
+                isExploding = false;
+                modeText.innerText = "STABLE";
+            }, 800);
+        }
+
         function setupAI() {
             const hands = new Hands({locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`});
-            
-            // Using modelComplexity 1 for RTX 2060
-            hands.setOptions({ 
-                maxNumHands: 1, 
-                modelComplexity: 1, 
-                minDetectionConfidence: 0.8,
-                minTrackingConfidence: 0.8 
-            });
+            hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.8 });
             
             hands.onResults((res) => {
                 if (res.multiHandLandmarks && res.multiHandLandmarks[0]) {
-                    hudMsg.innerText = "TRACKING ACTIVE";
-                    const h = res.multiHandLandmarks[0][9]; // Palm Center
+                    const h = res.multiHandLandmarks[0][9];
+                    const x = (0.5 - h.x) * 45;
+                    const y = (0.5 - h.y) * 35;
                     
-                    // X and Y mapping
-                    handX = (0.5 - h.x) * 45;
-                    handY = (0.5 - h.y) * 35;
-                    
-                    // Z-Depth Calculation (Distance between Thumb and Pinky tips)
+                    // BLAST DETECTION
+                    if (Math.abs(x - lastPalmX) > 4.5 || Math.abs(y - lastPalmY) > 4.5) triggerFirework();
+                    lastPalmX = x; lastPalmY = y;
+
                     const thumb = res.multiHandLandmarks[0][4];
                     const pinky = res.multiHandLandmarks[0][20];
-                    const handSize = Math.hypot(thumb.x - pinky.x, thumb.y - pinky.y);
-                    const zDepth = handSize * 60; // Expand nebula based on palm openness
-
-                    const time = performance.now() * 0.0008;
+                    const zDepth = Math.hypot(thumb.x - pinky.x, thumb.y - pinky.y) * 60;
 
                     for (let i = 0; i < count * 3; i += 3) {
-                        // 3D Spiral Nebula Math
                         const angle = i * 0.15;
-                        const radius = 6 + Math.sin(angle + time) * 2.5;
-                        
-                        targetPositions[i] = handX + Math.cos(angle) * radius;
-                        targetPositions[i+1] = handY + Math.sin(angle) * radius;
-                        // Use handSize to drive the Z-axis expansion
-                        targetPositions[i+2] = Math.sin(angle * 0.4 + time) * zDepth;
+                        const radius = 6 + Math.sin(angle + performance.now() * 0.001) * 2;
+                        targetPositions[i] = x + Math.cos(angle) * radius;
+                        targetPositions[i+1] = y + Math.sin(angle) * radius;
+                        targetPositions[i+2] = Math.sin(angle * 0.5) * zDepth;
                     }
-                } else {
-                    hudMsg.innerText = "SEARCHING FOR HAND...";
                 }
             });
 
             const cam = new Camera(videoElement, {
-                onFrame: async () => { 
-                    const start = performance.now();
-                    await hands.send({image: videoElement}); 
-                    latOut.innerText = Math.round(performance.now() - start);
-                },
+                onFrame: async () => { await hands.send({image: videoElement}); },
                 width: 640, height: 480
             });
             cam.start();
@@ -141,39 +153,27 @@
         function animate(time) {
             requestAnimationFrame(animate);
             
-            // FPS Counter
-            const delta = time - lastTime;
-            if (delta > 0) fpsOut.innerText = Math.round(1000 / delta);
+            fpsOut.innerText = Math.round(1000 / (time - lastTime));
             lastTime = time;
 
             const p = particles.geometry.attributes.position;
-            
-            // PHYSICS CONSTANTS
-            const friction = 0.90; // High friction for "Nebula" feel
-            const acceleration = 0.07; // Slow acceleration (0.75x speed feel)
+            const speed = 0.075; // YOUR 0.75X SPEED
 
             for (let i = 0; i < count * 3; i++) {
                 const diff = targetPositions[i] - p.array[i];
-                // Apply Velocity and Inertia
-                velocities[i] = (velocities[i] + diff * acceleration) * friction;
+                velocities[i] = (velocities[i] + diff * speed) * 0.92;
                 p.array[i] += velocities[i];
             }
-            
             p.needsUpdate = true;
             
-            // Slow rotation for extra 3D depth effect
-            particles.rotation.y += 0.002;
-            particles.rotation.x += 0.001;
+            if (!isExploding) particles.material.color.lerp(colorCyan, 0.05);
+            
+            // --- TRAIL EFFECT ---
+            renderer.setClearColor(0x000000, 0.12); // Controls trail length
+            renderer.clear(true, false, false); 
             
             renderer.render(scene, camera);
         }
-
-        // Handle window resizing
-        window.addEventListener('resize', () => {
-            camera.aspect = window.innerWidth / window.innerHeight;
-            camera.updateProjectionMatrix();
-            renderer.setSize(window.innerWidth, window.innerHeight);
-        });
 
         init();
     </script>
